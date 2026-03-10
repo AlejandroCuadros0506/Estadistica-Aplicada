@@ -1,0 +1,154 @@
+---
+title: "GRAN HOTEL CONCORDIA"
+author: "Jose Alejandro Reyes Cuadros"
+format: html
+editor: visual
+---
+
+## ANALISIS Y PREDICCION DEL HOTEL CONCORDIA 
+
+```{r}
+library(readxl)
+library(forecast)
+
+summary(basededatos
+```
+
+```{r}
+which(basededatos[[1]] == "Habitaciones Disponibles")
+
+which(basededatos[[1]] == "Habitaciones Ocupadas Paga")
+
+which(basededatos[[1]] == "Huespedes")
+
+which(basededatos[[1]] == "TARIFA PROMEDIO")
+```
+
+```{r}
+# Extraer datos reales (enero a diciembre)
+
+habitaciones_disponibles <- as.numeric(basededatos[4,2:13])
+
+habitaciones_ocupadas <- as.numeric(basededatos[5,2:13])
+
+huespedes <- as.numeric(basededatos[10,2:13])
+
+tarifa_promedio <- as.numeric(basededatos[11,2:13])
+```
+
+```{r}
+mes <- c("Enero","Febrero","Marzo","Abril","Mayo","Junio",
+         "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre")
+
+base_hotel <- data.frame(
+  mes,
+  habitaciones_disponibles,
+  habitaciones_ocupadas,
+  huespedes,
+  tarifa_promedio
+)
+
+base_hotel
+```
+
+```{r}
+serie_ocupacion <- ts(base_hotel$habitaciones_ocupadas, frequency = 12)
+
+plot(serie_ocupacion,
+     main="Serie de tiempo de ocupación hotelera",
+     xlab="Mes",
+     ylab="Habitaciones ocupadas")
+```
+
+```{r}
+var(base_hotel$habitaciones_ocupadas)
+```
+
+```{r}
+cov(base_hotel$habitaciones_ocupadas,
+    base_hotel$tarifa_promedio)
+```
+
+```{r}
+cor(base_hotel[,c("habitaciones_ocupadas",
+                  "tarifa_promedio",
+                  "huespedes",
+                  "habitaciones_disponibles")])
+```
+
+```{r}
+promedio_movil <- stats::filter(serie_ocupacion, rep(1/3,3))
+
+plot(serie_ocupacion,
+     main="Serie de tiempo de ocupación",
+     xlab="Mes",
+     ylab="Habitaciones ocupadas")
+
+lines(promedio_movil, col="red", lwd=2)
+```
+
+```{r}
+serie_diferenciada <- diff(serie_ocupacion)
+
+plot(serie_diferenciada,
+     main="Serie diferenciada",
+     xlab="Tiempo",
+     ylab="Cambio en ocupación")
+```
+
+```{r}
+acf(serie_ocupacion,
+    main="Autocorrelación de la ocupación")
+```
+
+```{r}
+pacf(serie_ocupacion,
+    main="Autocorrelación de la ocupación")
+```
+
+```{r}
+lambda <- BoxCox.lambda(serie_ocupacion)
+
+serie_boxcox <- BoxCox(serie_ocupacion, lambda)
+
+plot(serie_boxcox,
+     main="Serie transformada con Box-Cox")
+```
+
+```{r}
+ruido <- rnorm(length(serie_ocupacion))
+
+plot(ruido,
+     type="l",
+     main="Ruido blanco")
+```
+
+```{r}
+modelo_arima <- auto.arima(serie_ocupacion)
+
+summary(modelo_arima)
+```
+
+```{r}
+tarifa_ts <- ts(base_hotel$tarifa_promedio, frequency=12)
+
+modelo_sarimax <- auto.arima(serie_ocupacion,
+                             xreg=tarifa_ts)
+
+summary(modelo_sarimax)
+```
+
+```{r}
+tarifa_futura <- rep(mean(base_hotel$tarifa_promedio),12)
+
+pronostico_2026 <- forecast(modelo_sarimax,
+                            xreg=tarifa_futura,
+                            h=12)
+
+plot(pronostico_2026,
+     main="Pronóstico de ocupación hotelera para 2026",
+     xlab="Mes",
+     ylab="Habitaciones ocupadas")
+
+pronostico_2026
+```
