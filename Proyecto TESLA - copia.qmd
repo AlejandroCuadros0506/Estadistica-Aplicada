@@ -1,0 +1,471 @@
+---
+title: "Proyecto TESLA"
+format: html
+editor: visual
+---
+
+## Inicio
+
+```{r}
+library(quantmod)
+library(tseries)
+library(forecast)
+library(TTR)
+library(rugarch)      
+library(ggplot2)
+library(FinTS)
+```
+
+\*\*quantmod -\> Con este package podemos descargar bases de datos desde internet.
+
+\*\*forecast -\> Sirve para analizar series de tiempo.
+
+\*\* tseries -\> Pruebas estadísticas en las series de tiempo.
+
+```{r}
+getSymbols("TSLA", src = "yahoo")
+
+tesla <- Cl(TSLA)
+head(tesla)
+```
+
+\*\*Descargamos los precios históricos y seleccionamos el precio de cierre.
+
+```{r}
+tesla_ts <- ts(as.numeric(tesla))
+
+plot(tesla_ts, type="l",
+     main="Precio de Tesla",
+     ylab="Precio",
+     xlab="Tiempo")
+```
+
+\*\*Se observa que el precio ha cambiado drásticamente desde el 29 de junio de 2010, esto nos indica que la serie no es estacionaria ya que tiene una tendencia creciente.
+
+```{r}
+tesla_ts <- ts(as.numeric(tesla), 
+               frequency = 252)
+```
+
+\*\*Se usa el número 252 ya que son los días bursátiles del año.
+
+## Transformación Logarítmica
+
+```{r}
+log_tesla <- log(tesla_ts)
+
+plot(log_tesla, main="Log del precio de Tesla")
+```
+
+\*\*Aquí
+
+## Diferencias
+
+```{r}
+diff_tesla <- diff(log_tesla)
+plot(diff_tesla, main="Diferencias del log del precio")
+```
+
+Yt - Yt-1
+
+## Autocorrelación
+
+```{r}
+acf(diff_tesla)
+```
+
+\*\* La función ACF mide la relación entre: Yt y Yt-k
+
+Dependencia temporal y precencia de ruido blanco, la serie esta cerca de 0 por lo que se comporta como ruido blanco
+
+## Media Móvil
+
+```{r}
+ma30 <- stats::filter(tesla_ts, rep(1/30, 30))
+
+plot(tesla_ts)
+lines(ma30, col="red")
+```
+
+\*\* Aquí calculamos la media de los útlimos 30 periodos. Suavizamos fluctuaciones y mejramos la tendencia.
+
+## Prueba de estacionariedad
+
+```{r}
+adf.test(diff_tesla)
+```
+
+\*\* Prueba Dickey Fuller nos da un p-value de 0.01 y ahora la serie es estacionaria.
+
+## Test ARCH-LM
+
+```{r}
+# Test ARCH-LM para detectar si hay heteroscedasticidad
+# Si p-value < 0.05, hay efecto ARCH/GARCH
+
+arch_test <- ArchTest(diff_tesla, lags = 5)
+
+cat("╔════════════════════════════════════╗\n")
+cat("║  TEST ARCH-LM                      ║\n")
+cat("╚════════════════════════════════════╝\n\n")
+cat("Estadístico:", round(arch_test$statistic, 4), "\n")
+cat("p-value:", round(arch_test$p.value, 6), "\n")
+
+if (arch_test$p.value < 0.05) {
+  cat("\n✓ CONCLUSIÓN: Hay heteroscedasticidad (ARCH/GARCH presente)\n")
+} else {
+  cat("\n✗ CONCLUSIÓN: No hay heteroscedasticidad significativa\n")
+}
+```
+
+## Especificación de modelo GARCH (1,1)
+
+```{r}
+# Especificar modelo GARCH(1,1)
+# variance.model: ecuación de varianza
+# mean.model: ecuación de media
+# distribution.model: distribución de errores
+
+spec_garch <- ugarchspec(
+  variance.model = list(
+    model = "sGARCH",      # Modelo GARCH estándar
+    garchOrder = c(1, 1)   # GARCH(1,1)
+  ),
+  mean.model = list(
+    armaOrder = c(1, 1),   # ARMA(1,1) para la media
+    include.mean = TRUE
+  ),
+  distribution.model = "norm"  # Distribución normal
+)
+
+cat("✓ Especificación del modelo GARCH(1,1) completada\n")
+```
+
+## Estimar modelo GARCH
+
+```{r}
+# Estimar el modelo GARCH con los retornos logarítmicos
+fit_garch <- ugarchfit(
+  spec = spec_garch, 
+  data = diff_tesla,
+  solver = "hybrid"
+)
+
+cat("✓ Modelo GARCH(1,1) estimado correctamente\n")
+```
+
+## Tabla de parámetros
+
+```{r}
+# Extraer coeficientes
+coef_garch <- coef(fit_garch)
+
+# Calcular errores estándar y estadísticos t
+se_garch <- sqrt(diag(vcov(fit_garch)))
+t_stat <- coef_garch / se_garch
+p_values <- 2 * (1 - pnorm(abs(t_stat)))
+
+# Crear tabla de resultados
+tabla_parametros <- data.frame(
+  Parámetro = names(coef_garch),
+  Estimado = round(coef_garch, 6),
+  Error_Estándar = round(se_garch, 6),
+  t_estadístico = round(t_stat, 4),
+  p_valor = round(p_values, 6),
+  Significancia = ifelse(p_values < 0.01, "***",
+                        ifelse(p_values < 0.05, "**",
+                              ifelse(p_values < 0.10, "*", "")))
+)
+
+cat("\n╔════════════════════════════════════════════════════╗\n")
+cat("║  PARÁMETROS ESTIMADOS - MODELO GARCH(1,1)         ║\n")
+cat("╚════════════════════════════════════════════════════╝\n\n")
+print(tabla_parametros)
+
+# Calcular persistencia
+persistencia <- coef_garch["alpha1"] + coef_garch["beta1"]
+cat("\n\nPersistencia (α + β):", round(persistencia, 4), "\n")
+cat("Interpretación: Shocks en volatilidad decaen en", 
+    round(1 / (1 - persistencia), 2), "períodos\n")
+```
+
+## Criterios de información 
+
+```{r}
+# Extraer criterios de información
+criterios <- infocriteria(fit_garch)
+
+tabla_criterios <- data.frame(
+  Criterio = c("AIC", "BIC", "Shibata", "Hannan-Quinn"),
+  Valor = round(criterios, 4)
+)
+
+cat("\n╔════════════════════════════════════════╗\n")
+cat("║  CRITERIOS DE INFORMACIÓN              ║\n")
+cat("╚════════════════════════════════════════╝\n\n")
+print(tabla_criterios)
+```
+
+## Diágnosticos del modelo 
+
+```{r}
+# Extraer residuales estandarizados
+residuales_std <- fit_garch@fit$residuals / fit_garch@fit$sigma
+
+# Test de Jarque-Bera (normalidad)
+jb_test <- jarque.bera.test(residuales_std)
+
+# Test de Ljung-Box (autocorrelación)
+lb_test <- Box.test(residuales_std, lag = 10, type = "Ljung-Box")
+lb_test_squared <- Box.test(residuales_std^2, lag = 10, type = "Ljung-Box")
+
+# Tabla de diagnósticos
+tabla_diagnosticos <- data.frame(
+  Test = c("Jarque-Bera", "Ljung-Box Q(10)", "Ljung-Box Q²(10)"),
+  Estadístico = c(round(jb_test$statistic, 4),
+                  round(lb_test$statistic, 4),
+                  round(lb_test_squared$statistic, 4)),
+  p_valor = c(round(jb_test$p.value, 6),
+              round(lb_test$p.value, 6),
+              round(lb_test_squared$p.value, 6)),
+  Conclusión = c(
+    ifelse(jb_test$p.value > 0.05, "Residuales normales", "No normal"),
+    ifelse(lb_test$p.value > 0.05, "Sin autocorrelación", "Autocorrelación"),
+    ifelse(lb_test_squared$p.value > 0.05, "Varianza homogénea", "Heteroscedasticidad")
+  )
+)
+
+cat("\n╔════════════════════════════════════════════════════╗\n")
+cat("║  DIAGNÓSTICOS DEL MODELO GARCH                     ║\n")
+cat("╚════════════════════════════════════════════════════╝\n\n")
+print(tabla_diagnosticos)
+```
+
+## Gráficos residuales
+
+```{r}
+# Extraer volatilidad y residuales
+residuales_std <- fit_garch@fit$residuals / fit_garch@fit$sigma
+volatilidad_condicional <- fit_garch@fit$sigma
+
+# Gráfico 1: Residuales estandarizados
+par(mfrow = c(2, 2))
+
+plot(residuales_std, type = "l",
+     main = "Residuales Estandarizados GARCH(1,1)",
+     ylab = "Residual",
+     xlab = "Tiempo",
+     col = "steelblue")
+abline(h = c(-2, 0, 2), col = c("red", "black", "red"), lty = c(2, 1, 2))
+
+# Gráfico 2: Histograma de residuales
+hist(residuales_std, breaks = 50,
+     main = "Distribución de Residuales Estandarizados",
+     xlab = "Residual",
+     ylab = "Frecuencia",
+     col = "lightblue",
+     border = "black")
+
+# Gráfico 3: Q-Q Plot
+qqnorm(residuales_std, main = "Q-Q Plot de Residuales")
+qqline(residuales_std, col = "red", lwd = 2)
+
+# Gráfico 4: ACF de residuales
+acf(residuales_std, main = "ACF de Residuales Estandarizados")
+
+par(mfrow = c(1, 1))
+
+# Gráfico 5: Volatilidad condicional
+plot(volatilidad_condicional, type = "l",
+     main = "Volatilidad Condicional (σt) - GARCH(1,1)",
+     ylab = "Volatilidad",
+     xlab = "Tiempo",
+     col = "darkred")
+```
+
+## Pronóstico de volatilidad 
+
+```{r}
+# Generar pronósticos de volatilidad 30 días adelante
+horizonte <- 30
+
+# Pronóstico
+forecast_garch <- ugarchforecast(
+  fit_garch, 
+  n.ahead = horizonte
+)
+
+# Extraer volatilidades pronosticadas
+volatilidad_pronosticada <- sigma(forecast_garch)
+media_pronosticada <- fitted(forecast_garch)
+
+# Crear tabla de pronósticos
+tabla_pronosticos_vol <- data.frame(
+  Día = 1:horizonte,
+  Volatilidad_Pronósticada = round(as.numeric(volatilidad_pronosticada), 6),
+  Media_Pronósticada = round(as.numeric(media_pronosticada), 6),
+  Límite_Inferior_95 = round(as.numeric(media_pronosticada - 1.96*volatilidad_pronosticada), 6),
+  Límite_Superior_95 = round(as.numeric(media_pronosticada + 1.96*volatilidad_pronosticada), 6)
+)
+
+cat("\n╔════════════════════════════════════════════════════╗\n")
+cat("║  PRONÓSTICO DE VOLATILIDAD - 30 DÍAS               ║\n")
+cat("╚════════════════════════════════════════════════════╝\n\n")
+print(head(tabla_pronosticos_vol, 10))
+```
+
+## Gráfico de pronóstico de volatilidad 
+
+```{r}
+# Últimos 100 días históricos
+volatilidad_historica <- tail(volatilidad_condicional, 100)
+n_hist <- length(volatilidad_historica)
+
+# Eje x para historia y pronóstico
+x_hist <- 1:n_hist
+x_forecast <- (n_hist + 1):(n_hist + horizonte)
+
+# Valores de pronóstico
+vol_forecast <- as.numeric(volatilidad_pronosticada)
+
+# Gráfico
+plot(x_hist, volatilidad_historica,
+     type = "l", col = "black", lwd = 2,
+     xlim = c(1, n_hist + horizonte),
+     ylim = c(min(volatilidad_historica, vol_forecast) * 0.8,
+              max(volatilidad_historica, vol_forecast) * 1.2),
+     main = "Tesla - Volatilidad Histórica y Pronóstico GARCH(1,1) (30 días)",
+     ylab = "Volatilidad",
+     xlab = "Tiempo")
+
+# Línea de pronóstico
+lines(x_forecast, vol_forecast, col = "blue", lwd = 2, lty = 2)
+
+# Línea vertical de separación
+abline(v = n_hist, col = "red", lty = 3, lwd = 2)
+
+# Leyenda
+legend("topleft",
+       legend = c("Volatilidad histórica", "Pronóstico (30 días)"),
+       col = c("black", "blue"),
+       lty = c(1, 2),
+       lwd = 2)
+```
+
+## ARIMA
+
+```{r}
+pacf(diff_tesla, main = "PACF de los retornos logarítmicos")
+```
+
+```{r}
+# auto.arima  (p,d,q)
+# usando criterio de información AIC/BIC
+modelo_arima <- auto.arima(log_tesla, 
+                            seasonal = FALSE,
+                            stepwise = FALSE,
+                            approximation = FALSE,
+                            trace = TRUE)
+
+summary(modelo_arima)
+```
+
+```{r}
+# Graficamos los residuos del modelo para verificar que se comporten 
+
+checkresiduals(modelo_arima)
+```
+
+```{r}
+# Pronosticamos 30 días hacia adelante en escala logarítmica
+pronostico <- forecast(modelo_arima, h = 30)
+
+# Graficamos el pronóstico
+plot(pronostico,
+     main = "Pronóstico ARIMA - Log Precio Tesla (30 días)",
+     ylab = "Log(Precio)",
+     xlab = "Tiempo")
+```
+
+```{r}
+# Obtenemos el último precio de cierre 
+ultimo_precio <- as.numeric(tail(tesla, 1))
+
+# Convertimos los valores pronosticados (log) a precios reales con exp()
+precios_forecast <- exp(pronostico$mean)
+precio_lower_95  <- exp(pronostico$lower[, 2])
+precio_upper_95  <- exp(pronostico$upper[, 2])
+
+# Creamos tabla de resultados
+dias <- 1:30
+tabla_forecast <- data.frame(
+  Dia          = dias,
+  Precio_Est   = round(as.numeric(precios_forecast), 2),
+  Limite_Inf   = round(as.numeric(precio_lower_95), 2),
+  Limite_Sup   = round(as.numeric(precio_upper_95), 2)
+)
+
+print(tabla_forecast)
+```
+
+```{r}
+# Tomamos los últimos 100 días de precio real para contexto visual
+precios_recientes <- tail(as.numeric(tesla), 100)
+n_hist <- length(precios_recientes)
+
+# Eje x: historia + pronóstico
+x_hist     <- 1:n_hist
+x_forecast <- (n_hist + 1):(n_hist + 30)
+
+# Graficamos
+plot(x_hist, precios_recientes,
+     type = "l", col = "black", lwd = 2,
+     xlim = c(1, n_hist + 30),
+     ylim = range(c(precios_recientes, precio_lower_95, precio_upper_95)),
+     main = "Tesla - Precio Real y Pronóstico 30 días (ARIMA)",
+     ylab = "Precio USD",
+     xlab = "Días")
+
+# Banda de confianza al 95%
+polygon(c(x_forecast, rev(x_forecast)),
+        c(precio_upper_95, rev(precio_lower_95)),
+        col = rgb(0.2, 0.5, 0.8, 0.3), border = NA)
+
+# Línea de pronóstico central
+lines(x_forecast, as.numeric(precios_forecast), col = "blue", lwd = 2, lty = 2)
+
+# Línea vertical separando historia y pronóstico  
+abline(v = n_hist, col = "red", lty = 3)
+
+legend("topleft",
+       legend = c("Precio histórico", "Pronóstico", "IC 95%"),
+       col    = c("black", "blue", rgb(0.2, 0.5, 0.8, 0.5)),
+       lty    = c(1, 2, NA),
+       pch    = c(NA, NA, 15),
+       lwd    = 2)
+
+```
+
+## Comparación ARIMA vs GARCH
+
+```{r}
+# Resumen comparativo
+cat("\n╔════════════════════════════════════════════════════╗\n")
+cat("║  RESUMEN: ARIMA vs GARCH                           ║\n")
+cat("╚════════════════════════════════════════════════════╝\n\n")
+
+cat("MODELO ARIMA:\n")
+cat("  → Pronostica PRECIOS (escala logarítmica)\n")
+cat("  → Captura tendencia y autocorrelación\n")
+cat("  → Asume varianza constante\n\n")
+
+cat("MODELO GARCH(1,1):\n")
+cat("  → Pronostica VOLATILIDAD (desviación estándar)\n")
+cat("  → Captura cambios en varianza condicional\n")
+cat("  → Modela heteroscedasticidad\n")
+cat("  → Permite bandas de confianza dinámicas\n\n")
+
+cat("USO COMBINADO:\n")
+cat("  → ARIMA para pronósticos de precios\n")
+cat("  → GARCH para niveles de riesgo/volatilidad\n")
+```
